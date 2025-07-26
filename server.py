@@ -20,6 +20,10 @@ def search_law():
 
     if response.status_code == 200:
         try:
+            # 👉 여기 추가
+            print("=== 응답 XML 원본 ===")
+            print(response.text)
+
             root = ET.fromstring(response.content)
             laws = []
             for law in root.findall('law'):
