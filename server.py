@@ -10,21 +10,27 @@ def search_law():
     keyword = request.args.get('keyword')
     api_url = 'https://www.law.go.kr/DRF/lawSearch.do'
     params = {
-        'OC': 'dangerous99',
+        'OC': 'dangerous99',  # 여기에 본인의 승인된 OC 값 사용
         'target': 'law',
         'query': keyword,
         'type': 'XML'
     }
 
     response = requests.get(api_url, params=params)
-
-    # ✅ 응답 XML 출력 - Render 로그에서 확인 가능
-    print("=== 응답 XML 원본 ===")
-    print(response.text)
+    response.encoding = 'utf-8'  # 한글 깨짐 방지
 
     if response.status_code == 200:
+        content_type = response.headers.get('Content-Type', '')
+        # HTML 응답일 경우 오류 처리
+        if 'text/html' in content_type:
+            return jsonify({
+                'error': 'HTML 오류 응답 수신 - 도메인/IP 승인 여부를 다시 확인하세요.',
+                'detail': '응답이 XML이 아닌 HTML 형식입니다. 실제 국가법령정보센터 오류 페이지일 수 있습니다.',
+                'raw_response': response.text[:500]
+            })
+
         try:
-            root = ET.fromstring(response.content)
+            root = ET.fromstring(response.text)
             laws = []
             for law in root.findall('law'):
                 law_info = {
@@ -37,14 +43,25 @@ def search_law():
                 }
                 laws.append(law_info)
             return jsonify(laws)
-        except Exception as e:
-            return jsonify({'error': 'XML 파싱 중 오류 발생', 'detail': str(e)})
+
+        except ET.ParseError as e:
+            return jsonify({
+                'error': 'XML 파싱 중 오류 발생',
+                'detail': str(e),
+                'raw_response': response.text[:500]
+            })
+
     else:
-        return jsonify({'error': 'API 요청 실패', 'status': response.status_code})
+        return jsonify({
+            'error': 'API 요청 실패',
+            'status': response.status_code,
+            'response_text': response.text[:500]
+        })
 
 @app.route("/openapi.yaml")
 def openapi_yaml():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'openapi.yaml', mimetype='text/yaml')
+
 
 if __name__ == '__main__':
     app.run(port=5001)
