@@ -19,11 +19,18 @@ def search_law():
         "query": keyword
     }
 
-    try:
-        response = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
-        response.encoding = "utf-8"  # 인코딩 강제 지정
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/xml",
+        "Referer": "https://www.law.go.kr",
+        "Content-Type": "application/xml; charset=UTF-8"
+    }
 
-        # 응답 본문이 HTML이면 오류 반환
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.encoding = "utf-8"
+
+        # HTML 응답이면 실패로 처리
         if "<html" in response.text.lower():
             return jsonify({
                 "error": "XML 아님 - 응답이 HTML일 수 있음",
@@ -42,15 +49,14 @@ def search_law():
 
         laws = []
         for law in root.findall("law"):
-            law_info = {
+            laws.append({
                 "법령명": law.findtext("법령명한글"),
                 "법령ID": law.findtext("법령ID"),
                 "공포일자": law.findtext("공포일자"),
                 "시행일자": law.findtext("시행일자"),
                 "소관부처": law.findtext("소관부처명"),
                 "링크": f"https://www.law.go.kr/법령/{law.findtext('법령ID')}"
-            }
-            laws.append(law_info)
+            })
 
         return jsonify(laws)
 
