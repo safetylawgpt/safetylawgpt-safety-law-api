@@ -1,18 +1,22 @@
 openapi: 3.0.0
 info:
-  title: 법령 검색 API
-  version: 1.0.0
+  title: SafetyLawGPT API
+  description: 산업안전보건 관련 법령 검색용 Open API
+  version: "1.0.0"
+
 servers:
-  - url: https://your-render-service.onrender.com  # 추후 실제 URL로 교체
+  - url: https://safetylawgpt-safety-law-api.onrender.com
+
 paths:
   /search:
     get:
-      summary: 키워드로 법령 검색
-      description: 키워드를 통해 국가법령정보센터 API를 호출하여 관련 법령을 반환합니다.
+      summary: 법령 검색
+      description: 키워드를 기반으로 국가법령정보센터에서 법령 목록을 검색합니다.
       parameters:
         - in: query
           name: keyword
           required: true
+          description: 검색할 법령 키워드 (예: 산업안전보건)
           schema:
             type: string
       responses:
@@ -21,9 +25,23 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    items:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    법령명:
                       type: string
+                    법령ID:
+                      type: string
+                    공포일자:
+                      type: string
+                    시행일자:
+                      type: string
+                    소관부처:
+                      type: string
+                    링크:
+                      type: string
+        '400':
+          description: 잘못된 요청
+        '500':
+          description: 서버 내부 오류
