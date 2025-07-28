@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
-import os
+from flask import Flask, request, jsonify
 import requests
 import xml.etree.ElementTree as ET
 
@@ -8,48 +7,59 @@ app = Flask(__name__)
 @app.route('/search', methods=['GET'])
 def search_law():
     keyword = request.args.get('keyword')
-    api_url = 'https://www.law.go.kr/DRF/lawSearch.do'
+    if not keyword:
+        return jsonify({"error": "Missing keyword parameter"}), 400
+
+    url = "https://www.law.go.kr/DRF/lawSearch.do"
     params = {
-        'OC': 'dangerous99',
-        'target': 'law',
-        'query': keyword,
-        'type': 'XML'
+        "OC": "dangerous99",
+        "target": "law",
+        "type": "XML",
+        "query": keyword
     }
 
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/xml"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/xml,text/xml,application/xhtml+xml",
+        "Referer": "https://www.law.go.kr/",
+        "Connection": "keep-alive",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
     }
 
-    response = requests.get(api_url, params=params, headers=headers)
-
-    # HTML 오류 응답 방지
-    if response.headers.get("Content-Type", "").startswith("text/html"):
-        return jsonify({
-            'error': 'XML 아님 - 응답이 HTML일 수 있음',
-            'raw_response': response.text[:500]
-        })
-
     try:
-        root = ET.fromstring(response.content)
-        laws = []
-        for law in root.findall('law'):
-            law_info = {
-                '법령명': law.findtext('법령명한글') or '',
-                '법령ID': law.findtext('법령ID') or '',
-                '공포일자': law.findtext('공포일자') or '',
-                '시행일자': law.findtext('시행일자') or '',
-                '소관부처': law.findtext('소관부처명') or '',
-                '링크': 'https://www.law.go.kr' + (law.findtext('법령상세링크') or '')
-            }
-            laws.append(law_info)
-        return jsonify(laws)
-    except Exception as e:
-        return jsonify({'error': 'XML 파싱 오류', 'detail': str(e)})
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.encoding = 'utf-8'
 
-@app.route("/openapi.yaml")
-def openapi_yaml():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'openapi.yaml', mimetype='text/yaml')
+        if 'html' in response.text.lower():
+            return jsonify({
+                "error": "XML 아님 - 응답이 HTML일 수 있음",
+                "raw_response": response.text[:500]
+            }), 500
+
+        root = ET.fromstring(response.text)
+        results = []
+
+        for law in root.findall('law'):  # 'law' 요소는 실제 XML 응답 구조에 따라 바꿔야 함
+            result = {
+                "법령명": law.findtext('법령명'),
+                "법령ID": law.findtext('법령ID'),
+                "공포일자": law.findtext('공포일자'),
+                "시행일자": law.findtext('시행일자'),
+                "소관부처": law.findtext('소관부처'),
+                "링크": law.findtext('연결주소')
+            }
+            results.append(result)
+
+        if not results:
+            return jsonify({"message": "검색 결과가 없습니다."}), 200
+
+        return jsonify(results)
+
+    except ET.ParseError as e:
+        return jsonify({"error": "XML 파싱 오류", "detail": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": "서버 오류", "detail": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(port=5001)
+    app.run(debug=True)
