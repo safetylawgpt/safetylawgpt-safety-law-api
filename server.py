@@ -4,62 +4,58 @@ import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
-@app.route('/search', methods=['GET'])
+@app.route("/search")
 def search_law():
-    keyword = request.args.get('keyword')
+    keyword = request.args.get("keyword")
     if not keyword:
-        return jsonify({"error": "Missing keyword parameter"}), 400
+        return jsonify({"error": "검색어를 입력하세요."}), 400
 
+    # 국가법령정보센터 API 주소
     url = "https://www.law.go.kr/DRF/lawSearch.do"
     params = {
-        "OC": "dangerous99",
+        "OC": "dangerous99",  # 승인받은 OC 키
         "target": "law",
         "type": "XML",
         "query": keyword
     }
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/xml,text/xml,application/xhtml+xml",
-        "Referer": "https://www.law.go.kr/",
-        "Connection": "keep-alive",
-        "Accept-Encoding": "gzip, deflate",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-    }
-
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.encoding = 'utf-8'
+        response = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
+        response.encoding = "utf-8"  # 인코딩 강제 지정
 
-        if 'html' in response.text.lower():
+        # 응답 본문이 HTML이면 오류 반환
+        if "<html" in response.text.lower():
             return jsonify({
                 "error": "XML 아님 - 응답이 HTML일 수 있음",
                 "raw_response": response.text[:500]
             }), 500
 
-        root = ET.fromstring(response.text)
-        results = []
+        # XML 파싱
+        try:
+            root = ET.fromstring(response.text)
+        except ET.ParseError as e:
+            return jsonify({
+                "error": "XML 파싱 실패",
+                "detail": str(e),
+                "raw_response": response.text[:500]
+            }), 500
 
-        for law in root.findall('law'):  # 'law' 요소는 실제 XML 응답 구조에 따라 바꿔야 함
-            result = {
-                "법령명": law.findtext('법령명'),
-                "법령ID": law.findtext('법령ID'),
-                "공포일자": law.findtext('공포일자'),
-                "시행일자": law.findtext('시행일자'),
-                "소관부처": law.findtext('소관부처'),
-                "링크": law.findtext('연결주소')
+        laws = []
+        for law in root.findall("law"):
+            law_info = {
+                "법령명": law.findtext("법령명한글"),
+                "법령ID": law.findtext("법령ID"),
+                "공포일자": law.findtext("공포일자"),
+                "시행일자": law.findtext("시행일자"),
+                "소관부처": law.findtext("소관부처명"),
+                "링크": f"https://www.law.go.kr/법령/{law.findtext('법령ID')}"
             }
-            results.append(result)
+            laws.append(law_info)
 
-        if not results:
-            return jsonify({"message": "검색 결과가 없습니다."}), 200
+        return jsonify(laws)
 
-        return jsonify(results)
-
-    except ET.ParseError as e:
-        return jsonify({"error": "XML 파싱 오류", "detail": str(e)}), 500
     except Exception as e:
-        return jsonify({"error": "서버 오류", "detail": str(e)}), 500
+        return jsonify({"error": "요청 실패", "detail": str(e)}), 500
 
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    app.run()
