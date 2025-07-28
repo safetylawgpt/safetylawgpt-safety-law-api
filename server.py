@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
-import os
+from flask import Flask, request, jsonify
 import requests
 import xml.etree.ElementTree as ET
 
@@ -8,61 +7,58 @@ app = Flask(__name__)
 @app.route('/search', methods=['GET'])
 def search_law():
     keyword = request.args.get('keyword')
-    api_url = 'https://www.law.go.kr/DRF/lawSearch.do'
+    if not keyword:
+        return jsonify({"error": "Missing 'keyword' parameter"}), 400
+
+    base_url = 'https://www.law.go.kr/DRF/lawSearch.do'
+    api_key = 'dangerous99'  # ← 발급받은 사용자 키
     params = {
-        'OC': 'dangerous99',  # 여기에 본인의 승인된 OC 값 사용
+        'OC': api_key,
         'target': 'law',
-        'query': keyword,
-        'type': 'XML'
+        'type': 'XML',
+        'query': keyword
     }
 
-    response = requests.get(api_url, params=params)
-    response.encoding = 'utf-8'  # 한글 깨짐 방지
+    headers = {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/xml'
+    }
 
-    if response.status_code == 200:
-        content_type = response.headers.get('Content-Type', '')
-        # HTML 응답일 경우 오류 처리
-        if 'text/html' in content_type:
+    try:
+        response = requests.get(base_url, params=params, headers=headers)
+        if response.status_code != 200:
             return jsonify({
-                'error': 'HTML 오류 응답 수신 - 도메인/IP 승인 여부를 다시 확인하세요.',
-                'detail': '응답이 XML이 아닌 HTML 형식입니다. 실제 국가법령정보센터 오류 페이지일 수 있습니다.',
-                'raw_response': response.text[:500]
-            })
+                "error": f"HTTP error {response.status_code}",
+                "detail": response.text
+            }), response.status_code
 
         try:
-            root = ET.fromstring(response.text)
-            laws = []
-            for law in root.findall('law'):
-                law_info = {
-                    '법령명': law.findtext('법령명한글') or '',
-                    '법령ID': law.findtext('법령ID') or '',
-                    '공포일자': law.findtext('공포일자') or '',
-                    '시행일자': law.findtext('시행일자') or '',
-                    '소관부처': law.findtext('소관부처명') or '',
-                    '링크': 'https://www.law.go.kr' + (law.findtext('법령상세링크') or ''),
-                }
-                laws.append(law_info)
-            return jsonify(laws)
-
-        except ET.ParseError as e:
+            root = ET.fromstring(response.content)
+        except ET.ParseError:
             return jsonify({
-                'error': 'XML 파싱 중 오류 발생',
-                'detail': str(e),
-                'raw_response': response.text[:500]
-            })
+                "error": "HTML 오류 응답 수신 - 도메인/IP 승인 여부를 다시 확인하세요.",
+                "detail": "응답이 XML이 아닌 HTML 형식입니다. 실제 국가법령정보센터 오류 페이지일 수 있습니다.",
+                "raw_response": response.text[:500]  # 응답의 앞부분 일부만 반환
+            }), 500
 
-    else:
-        return jsonify({
-            'error': 'API 요청 실패',
-            'status': response.status_code,
-            'response_text': response.text[:500]
-        })
+        results = []
+        for law in root.findall('.//law'):
+            law_info = {
+                "법령명": law.findtext('법령명'),
+                "법령ID": law.findtext('법령ID'),
+                "공포일자": law.findtext('공포일자'),
+                "시행일자": law.findtext('시행일자'),
+                "소관부처": law.findtext('소관부처'),
+                "링크": f"https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq={law.findtext('법령ID')}"
+            }
+            results.append(law_info)
 
-@app.route("/openapi.yaml")
-def openapi_yaml():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'openapi.yaml', mimetype='text/yaml')
+        return jsonify(results), 200
+
+    except Exception as e:
+        return jsonify({"error": "예상치 못한 서버 오류", "detail": str(e)}), 500
 
 
 if __name__ == '__main__':
-    app.run(port=5001)
+    app.run(host='0.0.0.0', port=10000)
 
