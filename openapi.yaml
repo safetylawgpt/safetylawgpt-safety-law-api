@@ -43,5 +43,22 @@ paths:
                       type: string
         '400':
           description: 잘못된 요청
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
         '500':
           description: 서버 내부 오류
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  detail:
+                    type: string
+
