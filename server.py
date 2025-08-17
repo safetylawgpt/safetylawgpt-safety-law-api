@@ -197,7 +197,7 @@ def pick_latest_exact_law(law_name_query: str):
 # ===== 절차/서식 추출 규칙 =====
 RE_DEADLINE = re.compile(r"(\d+)\s*일\s*이내")
 RE_FORM = re.compile(r"별지\s*제?\s*(\d+)(?:호의?\d*호)?\s*서식")
-RE_AUTH = re.compile(r"(관할\s*[가-힣]+관서|지방고용노동관서|산업안전과|산재예방과)")
+RE_AUTH = re.compile(r"(관할\s*[가-힣]+관서|지방고용노동관서|산재예방과|산업안전과)")
 
 
 def extract_procedure_steps(text: str):
@@ -324,7 +324,7 @@ def build_structured_answer(law_hint: str, citation_hint: str, query: str) -> Di
             source_url=f"https://www.law.go.kr/법령/{picked['법령ID']}",
             procedure_steps=[
                 "조문에 명시된 별지 서식으로 보고서 작성(미확인 시 참고 자료 활용)",
-                "제출처: 관할 지방고용노동관서(산업안전과) 등",
+                "제출처: 관할 지방고용노동관서(산재예방과) 등",
                 "제출 기한: 조문상 정한 기한(예: OO일 이내)"
             ],
             forms_list=forms_fb, disclaimer_text=DISCLAIMER
