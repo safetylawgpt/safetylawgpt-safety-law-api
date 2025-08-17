@@ -1,6 +1,6 @@
-# server.py — 안전법 도우미 최종본
-# 어떤 질문이 와도 "법적 근거 → 절차 요약 → 서식 안내 → 면책 고지문" 형식으로 응답
-# 공식 서식이 없을 땐: 세이프티 코리아(티스토리) & 안전보건 실전소통방(카카오) 자동 안내
+# server.py — 안전법 도우미 최종본 (v4.1-flex)
+# 어떤 질문이 와도 기본은 "법적 근거 → (절차) → (서식) → 면책 고지문" 형식
+# 필요 시 절차/서식은 생략 가능: /answer(.md)?...&mode=basic|auto|full &include_procedure=0/1 &include_forms=0/1
 
 import os
 import re
@@ -20,7 +20,8 @@ OC_KEY = os.getenv("NLIC_API_KEY", "").strip() or "dangerous99"
 LAW_SEARCH_URL = "https://www.law.go.kr/DRF/lawSearch.do"
 LAW_SERVICE_URL = "https://www.law.go.kr/DRF/lawService.do"
 
-GUIDELINE_PATH = os.path.join(os.path.dirname(__file__), "08.07 구성지침.txt")
+# 지침 파일: 08.17 버전으로 갱신
+GUIDELINE_PATH = os.path.join(os.path.dirname(__file__), "08.17 구성지침.txt")
 GUIDELINE_FALLBACK = "정확한 조문을 찾을 수 없습니다. 국가법령정보센터에서 직접 확인하십시오."
 
 DISCLAIMER = (
@@ -87,6 +88,13 @@ def norm(s: str) -> str:
 def yyyymmdd(s: str) -> str:
     s = re.sub(r"\D", "", s or "")
     return s if len(s) == 8 else "00000000"
+
+def str2bool(v: str, default: bool) -> bool:
+    if v is None: return default
+    v = str(v).strip().lower()
+    if v in ("1", "true", "t", "yes", "y", "on"): return True
+    if v in ("0", "false", "f", "no", "n", "off"): return False
+    return default
 
 # ===== 응답 스키마 =====
 @dataclass
@@ -199,7 +207,6 @@ RE_DEADLINE = re.compile(r"(\d+)\s*일\s*이내")
 RE_FORM = re.compile(r"별지\s*제?\s*(\d+)(?:호의?\d*호)?\s*서식")
 RE_AUTH = re.compile(r"(?:관할\s*[가-힣]+(?:지청|관서|청)|지방고용노동관서|[가-힣\s]{2,15}과)")
 
-
 def extract_procedure_steps(text: str):
     steps = []
     if RE_FORM.search(text): steps.append("조문에 명시된 별지 서식으로 보고서 작성")
@@ -226,8 +233,10 @@ def extract_forms(text: str):
         forms.append({"title": title, "desc": f"조문 확인된 서식 번호: 제{no}호", "url": "https://www.moel.go.kr/", "publisher": "고용노동부"})
     return forms
 
-def ensure_forms_with_fallback(forms: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    return forms if forms else list(FALLBACK_RESOURCES)
+def ensure_forms_with_option(forms: List[Dict[str, str]], use_fallback: bool) -> List[Dict[str, str]]:
+    if forms:
+        return forms
+    return list(FALLBACK_RESOURCES) if use_fallback else []
 
 # ===== 특정 조문 찾기 =====
 def find_article_by_citation(root: ET.Element, citation_hint: str):
@@ -297,40 +306,37 @@ def guess_target(query: str):
     return ("산업안전보건법 시행규칙", "제11조")
 
 # ===== 표준 형식 응답 빌더 =====
-def build_structured_answer(law_hint: str, citation_hint: str, query: str) -> Dict:
+def build_structured_answer(law_hint: str, citation_hint: str, query: str,
+                            mode: str = "auto", include_procedure: Optional[bool] = None,
+                            include_forms: Optional[bool] = None) -> Dict:
     picked, err = pick_latest_exact_law(law_hint)
     if err or not picked:
-        forms_fb = ensure_forms_with_fallback([])
+        forms_fb = ensure_forms_with_option([], use_fallback=(mode == "full" and (include_forms is not False)))
         return make_answer_v1(
             key=f"{law_hint}-{citation_hint}", law_name=law_hint, article=citation_hint,
             title=None, effective_date=None, summary="(요약) 해당 조문을 확인하십시오.",
             text="(조문 원문 로딩 실패) 국가법령정보센터에서 해당 조문을 직접 확인하십시오.",
             source_url="https://www.law.go.kr/",
-            procedure_steps=[
-                "조문에 명시된 별지 서식으로 보고서 작성(미확인 시 참고 자료 활용)",
-                "제출처: 관할 지방고용노동관서(산업안전과) 등",
-                "제출 기한: 조문상 정한 기한(예: OO일 이내)"
-            ],
-            forms_list=forms_fb, disclaimer_text=DISCLAIMER
+            procedure_steps=(["조문에 명시된 별지 서식으로 보고서 작성(미확인 시 참고 자료 활용)", "제출처: 관할 지방고용노동관서(산업안전과) 등", "제출 기한: 조문상 정한 기한(예: OO일 이내)"]
+                             if (mode == "full" and (include_procedure is not False)) else []),
+            forms_list=forms_fb,
+            disclaimer_text=DISCLAIMER
         )
 
     root, err = fetch_law_by_id(picked["법령ID"])
     if err or root is None:
-        forms_fb = ensure_forms_with_fallback([])
+        forms_fb = ensure_forms_with_option([], use_fallback=(mode == "full" and (include_forms is not False)))
         return make_answer_v1(
             key=f"{picked['법령명']}-{citation_hint}", law_name=picked["법령명"], article=citation_hint,
             title=None, effective_date=picked["시행일자"], summary="(요약) 해당 조문을 확인하십시오.",
             text="(조문 원문 로딩 실패) 국가법령정보센터에서 해당 조문을 직접 확인하십시오.",
             source_url=f"https://www.law.go.kr/법령/{picked['법령ID']}",
-            procedure_steps=[
-                "조문에 명시된 별지 서식으로 보고서 작성(미확인 시 참고 자료 활용)",
-                "제출처: 관할 지방고용노동관서(산업안전과) 등",
-                "제출 기한: 조문상 정한 기한(예: OO일 이내)"
-            ],
+            procedure_steps=(["조문에 명시된 별지 서식으로 보고서 작성(미확인 시 참고 자료 활용)", "제출처: 관할 지방고용노동관서(산업안전과) 등", "제출 기한: 조문상 정한 기한(예: OO일 이내)"]
+                             if (mode == "full" and (include_procedure is not False)) else []),
             forms_list=forms_fb, disclaimer_text=DISCLAIMER
         )
 
-    # 조문이 지정되면 해당 조문/항, 아니면 전체에서 스캔한 느낌 그대로 본문 사용
+    # 조문이 지정되면 해당 조문/항, 아니면 첫 조문을 사용
     art = None
     if citation_hint:
         art = find_article_by_citation(root, citation_hint)
@@ -341,14 +347,42 @@ def build_structured_answer(law_hint: str, citation_hint: str, query: str) -> Di
                "조문제목": (first.findtext("조문제목") if first is not None else "") or "",
                "본문": text or "(해당 조문을 찾지 못했습니다. 포털에서 확인하십시오.)"}
 
-    procedure = extract_procedure_steps(art["본문"])
-    forms = ensure_forms_with_fallback(extract_forms(art["본문"]))
+    # 절차/서식 후보 생성
+    procedure_all = extract_procedure_steps(art["본문"])
+    forms_extracted = extract_forms(art["본문"])
 
+    # auto 모드에서 '형식적 문구만' 있으면 숨김
+    def is_meaningful_procedure(items: List[str]) -> bool:
+        if not items: return False
+        return not (len(items) == 1 and "확인하십시오" in items[0])
+
+    # include_* 플래그 우선 적용, 그 다음 mode 로직
+    if include_procedure is not None:
+        procedure_final = procedure_all if include_procedure else []
+    else:
+        if mode == "basic":
+            procedure_final = []
+        elif mode == "full":
+            procedure_final = procedure_all
+        else:  # auto
+            procedure_final = procedure_all if is_meaningful_procedure(procedure_all) else []
+
+    if include_forms is not None:
+        forms_final = ensure_forms_with_option(forms_extracted, use_fallback=(include_forms and mode == "full"))
+    else:
+        if mode == "basic":
+            forms_final = []
+        elif mode == "full":
+            forms_final = ensure_forms_with_option(forms_extracted, use_fallback=True)
+        else:  # auto
+            forms_final = ensure_forms_with_option(forms_extracted, use_fallback=False)
+
+    # 요약
     summary_bits = []
     m_dead = RE_DEADLINE.search(art["본문"])
     if m_dead: summary_bits.append(f"{m_dead.group(0)} 내 보고 의무")
     if RE_FORM.search(art["본문"]): summary_bits.append("별지 서식에 따른 보고서 제출")
-    if not summary_bits: summary_bits.append("조문에 따른 보고·제출 의무가 적용됨")
+    if not summary_bits: summary_bits.append("관련 조문 원문을 확인하십시오.")
     summary = " · ".join(summary_bits)
 
     return make_answer_v1(
@@ -357,7 +391,7 @@ def build_structured_answer(law_hint: str, citation_hint: str, query: str) -> Di
         title=art["조문제목"], effective_date=picked["시행일자"],
         summary=summary, text=art["본문"],
         source_url=f"https://www.law.go.kr/법령/{picked['법령ID']}",
-        procedure_steps=procedure, forms_list=forms, disclaimer_text=DISCLAIMER
+        procedure_steps=procedure_final, forms=forms_final, disclaimer_text=DISCLAIMER
     )
 
 # ===== 헬스체크/보조 API =====
@@ -434,17 +468,34 @@ def scan_periodic():
 @app.get("/answer")
 def answer():
     q = request.args.get("q", "").strip()
+    mode = request.args.get("mode", "auto").strip().lower()
+    inc_proc = request.args.get("include_procedure", None)
+    inc_forms = request.args.get("include_forms", None)
     if not q: return jsonify({"ok": False, "message": "q(질문)을 입력하세요."}), 400
     law_hint, cite_hint = guess_target(q)
-    data = build_structured_answer(law_hint, cite_hint, q)
+    data = build_structured_answer(
+        law_hint, cite_hint, q,
+        mode=mode,
+        include_procedure=None if inc_proc is None else str2bool(inc_proc, True),
+        include_forms=None if inc_forms is None else str2bool(inc_forms, True),
+    )
     return jsonify({"ok": True, **data})
 
 @app.get("/answer.md")
 def answer_md():
     q = request.args.get("q", "").strip()
+    mode = request.args.get("mode", "auto").strip().lower()
+    inc_proc = request.args.get("include_procedure", None)
+    inc_forms = request.args.get("include_forms", None)
     if not q: return Response("q(질문)을 입력하세요.", mimetype="text/plain; charset=utf-8")
     law_hint, cite_hint = guess_target(q)
-    data = build_structured_answer(law_hint, cite_hint, q)
+    data = build_structured_answer(
+        law_hint, cite_hint, q,
+        mode=mode,
+        include_procedure=None if inc_proc is None else str2bool(inc_proc, True),
+        include_forms=None if inc_forms is None else str2bool(inc_forms, True),
+    )
+
     lines = []
     lines.append("# 법적 근거")
     for art in data["legal_basis"]:
@@ -454,20 +505,19 @@ def answer_md():
         ed = f" (개정 {art['effective_date']})" if art.get("effective_date") else ""
         title = f" — {art['title']}" if art.get("title") else ""
         lines.append(f"- **{art['law_name']} {art['article']}**{ed}{title}\n  - _원문_: {txt}\n  - 출처: {srcs}")
-    lines.append("\n# 절차 요약")
+
+    # 절차: 내용이 있을 때만
     if data["procedure"]:
+        lines.append("\n# 절차 요약")
         for i, s in enumerate(data["procedure"], 1):
             lines.append(f"{i}) {s}")
-    else:
-        lines.append("- (조문 내 절차 문구를 확인하십시오.)")
-    lines.append("\n# 서식 안내")
+
+    # 서식: 내용이 있을 때만
     if data["forms"]:
+        lines.append("\n# 서식 안내")
         for f in data["forms"]:
             lines.append(f"- **{f['title']}** — {f['desc']} ({f['publisher']})\n  링크: {f['url']}")
-    else:
-        lines.append("- 조문 내 서식 번호가 확인되지 않았습니다.")
-        lines.append("  · 참고: 세이프티 코리아(티스토리) — https://safety-korea.tistory.com/")
-        lines.append("  · 카카오톡 오픈채팅 ‘안전보건 실전소통방’ — https://open.kakao.com/o/g49w3IEh")
+
     lines.append("\n# 면책 고지문")
     lines.append(DISCLAIMER)
     return Response("\n".join(lines), mimetype="text/markdown; charset=utf-8")
@@ -477,4 +527,6 @@ if __name__ == "__main__":
     # 예:
     #  - JSON: http://127.0.0.1:5000/answer?q=건설업 안전관리자 해임 신고 방법
     #  - MD:   http://127.0.0.1:5000/answer.md?q=폭염 휴식 기준
+    #  - 모드: &mode=basic | auto | full
+    #  - 선택 플래그: &include_procedure=0/1 &include_forms=0/1
     app.run(host="0.0.0.0", port=5000)
