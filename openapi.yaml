@@ -1,423 +1,92 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
-  title: SafetyLawGPT API
-  description: |
-    산업안전보건 관련 질의를 표준 형식(법적 근거 → 절차 요약 → 서식 안내 → 면책 고지문)으로 응답하는 Open API.
-    - 법령/조문은 국가법령정보센터 DRF(XML)를 조회해 원문을 기반으로 제공합니다.
-    - 공식 서식이 확인되지 않을 경우, 세이프티 코리아(티스토리)·안전보건 실전 소통방(카카오 오픈채팅) 링크를 안내합니다.
-    - 면책 고지문(고정):
-      "본 응답은 [안전법 도우미 GPT]가 제공하는 참고용 법령 정보입니다.
-       정확한 법률 해석은 변호사 등 전문가와 상담하시기 바랍니다.
-       본 정보는 국가법령정보센터 및 고용노동부 고시 등을 기반으로 제공합니다."
-  version: "1.0.0"
-
+  title: Safety Law Helper API
+  version: "1.1.0"
 servers:
   - url: https://safetylawgpt-safety-law-api.onrender.com
-    description: Render 배포
-  - url: http://localhost:5000
-    description: 로컬 개발
-
-tags:
-  - name: Health
-    description: API 상태 확인
-  - name: Guideline
-    description: 응답 구성 지침 확인
-  - name: Laws
-    description: 법령 조회/검색
-  - name: Answers
-    description: 표준 형식 자동 응답
-
 paths:
   /healthz:
     get:
-      tags: [Health]
-      summary: 헬스 체크
-      operationId: healthz
+      summary: Health check
       responses:
-        '200':
-          description: 서비스 정상 여부
+        "200":
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                    example: true
-                  guideline_loaded:
-                    type: boolean
-                    description: 구성지침 파일 로드 여부
-                    example: true
-
-  /guideline:
+                $ref: '#/components/schemas/HealthzResponse'
+  /reload:
     get:
-      tags: [Guideline]
-      summary: 구성 지침 원문 확인
-      operationId: getGuideline
+      summary: Reload TSV index from source
       responses:
-        '200':
-          description: 구성지침 텍스트
+        "200":
+          description: Reloaded
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok:
-                    type: boolean
-                    example: true
-                  guideline:
-                    type: string
-                    description: 현재 적용 중인 응답 원칙/템플릿
-
+                  reloaded: { type: boolean, example: true }
+                  count:    { type: integer, example: 12345 }
   /search:
     get:
-      tags: [Laws]
-      summary: 법령 검색
-      description: 키워드를 기반으로 국가법령정보센터에서 법령 목록을 검색합니다.
-      operationId: searchLaws
+      summary: Search laws by keyword (exact phrase or token AND)
       parameters:
         - in: query
           name: keyword
           required: true
-          description: 검색할 키워드 (예: 산업안전보건)
-          schema:
-            type: string
+          schema: { type: string }
+          description: Korean phrase or keywords (e.g., "반기 1회 이상", "폭염 휴식")
         - in: query
           name: exact
           required: false
-          description: 법령명 정확일치 여부 (true/false 또는 1/0). 서버는 "1","true","True"를 true로 처리.
-          schema:
-            type: boolean
-          examples:
-            fuzzy:
-              summary: 부분 일치(기본)
-              value: false
-            exact:
-              summary: 정확 일치
-              value: true
-      responses:
-        '200':
-          description: 검색 성공 (소프트 에러도 200으로 반환)
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/SearchSuccess'
-                  - $ref: '#/components/schemas/SoftError'
-        '400':
-          description: 잘못된 요청(예: keyword 누락)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /scan:
-    get:
-      tags: [Laws]
-      summary: 특정 법령 전문에서 키워드 전수 스캔
-      operationId: scanLawByKeyword
-      parameters:
+          schema: { type: boolean, default: false }
+          description: If true, match exact phrase with space-insensitive regex.
         - in: query
-          name: law_name
-          required: true
-          description: 법령명(정확 일치 검색)
-          schema:
-            type: string
-          example: 산업안전보건법 시행규칙
-        - in: query
-          name: keyword
-          required: true
-          description: 전문에서 찾을 키워드
-          schema:
-            type: string
-          example: 반기
-      responses:
-        '200':
-          description: 스캔 결과 (소프트 에러도 200으로 반환)
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/ScanSuccess'
-                  - $ref: '#/components/schemas/SoftError'
-
-  /scan_periodic:
-    get:
-      tags: [Laws]
-      summary: 주기성 키워드(기본 '반기') 스캔
-      operationId: scanPeriodic
-      parameters:
-        - in: query
-          name: law_name
-          required: true
-          description: 법령명(정확 일치)
-          schema:
-            type: string
-          example: 산업안전보건법
-        - in: query
-          name: keyword
+          name: page
           required: false
-          description: 기본값 '반기'
-          schema:
-            type: string
-            default: 반기
-      responses:
-        '200':
-          description: 스캔 결과 (형식은 /scan과 동일)
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - $ref: '#/components/schemas/ScanSuccess'
-                  - $ref: '#/components/schemas/SoftError'
-
-  /answer:
-    get:
-      tags: [Answers]
-      summary: 표준 형식 자동 응답(JSON)
-      description: |
-        임의의 질문(q)을 입력하면, 내부 라우팅으로 적절한 법령·조문을 선택해
-        "법적 근거 → 절차 요약 → 서식 안내 → 면책 고지문" 구조로 JSON을 반환합니다.
-        - 공식 서식이 없으면 세이프티 코리아/오픈채팅 링크로 폴백합니다.
-      operationId: getAnswerJson
-      parameters:
+          schema: { type: integer, minimum: 1, default: 1 }
         - in: query
-          name: q
-          required: true
-          description: 사용자 질문
-          schema:
-            type: string
-          example: 건설업 안전관리자 해임 신고 방법
+          name: page_size
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
       responses:
-        '200':
-          description: 표준 응답
+        "200":
+          description: Search results (paginated)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SafetyAnswerResponse'
-        '400':
-          description: 잘못된 요청(q 누락 등)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /answer.md:
-    get:
-      tags: [Answers]
-      summary: 표준 형식 자동 응답(Markdown)
-      operationId: getAnswerMarkdown
-      parameters:
-        - in: query
-          name: q
-          required: true
-          schema:
-            type: string
-          example: 안전관리자 해임 신고
-      responses:
-        '200':
-          description: Markdown 형식 응답(미리보기용)
-          content:
-            text/markdown:
-              schema:
-                type: string
-                example: |
-                  # 법적 근거
-                  - **산업안전보건법 시행규칙 제11조 제2항** ...
-                  # 절차 요약
-                  1) ...
-                  # 서식 안내
-                  - ...
-                  # 면책 고지문
-                  본 응답은 [안전법 도우미 GPT]가 제공하는 참고용 법령 정보입니다...
-        '400':
-          description: 잘못된 요청
-          content:
-            text/plain:
-              schema:
-                type: string
-                example: q(질문)을 입력하세요.
-
+                $ref: '#/components/schemas/SearchResponse'
 components:
   schemas:
-    LawItem:
+    HealthzResponse:
       type: object
+      required: [status, uptime, version]
       properties:
-        법령명:
-          type: string
-          example: 산업안전보건법 시행규칙
-        법령ID:
-          type: string
-          example: "123456"
-        공포일자:
-          type: string
-          example: "20240429"
-        시행일자:
-          type: string
-          example: "20250429"
-        소관부처:
-          type: string
-          example: 고용노동부
-        링크:
-          type: string
-          example: https://www.law.go.kr/법령/123456
-        source:
-          type: string
-          example: law.go.kr
-
-    SourceRef:
+        status:  { type: string, example: "ok" }
+        uptime:  { type: number, example: 12.3 }
+        version: { type: string, example: "1.1.0" }
+    SearchItem:
       type: object
+      required: [lawId, lawTitle, unitType, unitNo, title, textPlain, sourceUrl]
       properties:
-        label:
-          type: string
-          example: 국가법령정보센터
-        url:
-          type: string
-          example: https://www.law.go.kr/법령/123456
-
-    LegalBasisItem:
+        lawId:     { type: string, example: "001766" }
+        lawTitle:  { type: string, example: "산업안전보건법" }
+        unitType:  { type: string, enum: ["조","항","호","목"], example: "항" }
+        unitNo:    { type: string, example: "제29조 제1항" }
+        title:     { type: string, example: "안전보건교육" }
+        textPlain: { type: string, example: "사업주는 ... 반기 1회 이상 ..." }
+        textHtml:  { type: string, nullable: true, example: "<p>...</p>" }
+        enactedAt: { type: string, nullable: true, example: "2020-05-26" }
+        amendedAt: { type: string, nullable: true, example: "2024-06-28" }
+        sourceUrl: { type: string, example: "https://law.go.kr/법령/001766" }
+    SearchResponse:
       type: object
+      required: [total, page, page_size, items]
       properties:
-        law_name:
-          type: string
-          example: 산업안전보건법 시행규칙
-        article:
-          type: string
-          example: 제11조 제2항
-        title:
-          type: string
-          nullable: true
-          example: 안전관리자 등의 선임 등 보고
-        effective_date:
-          type: string
-          nullable: true
-          example: "20250429"
-        summary:
-          type: string
-          example: 14일 이내 보고 의무 및 별지 서식 제출
-        text:
-          type: string
-          example: 조문 원문 전문...
-        sources:
+        total:     { type: integer, example: 7 }
+        page:      { type: integer, example: 1 }
+        page_size: { type: integer, example: 50 }
+        items:
           type: array
-          items:
-            $ref: '#/components/schemas/SourceRef'
-
-    FormItem:
-      type: object
-      properties:
-        title:
-          type: string
-          example: 별지 제3호의2서식
-        desc:
-          type: string
-          example: 안전관리자·보건관리자·산업보건의 해임 등 보고서
-        url:
-          type: string
-          example: https://www.moel.go.kr/
-        publisher:
-          type: string
-          example: 고용노동부
-
-    SafetyAnswerResponse:
-      type: object
-      properties:
-        ok:
-          type: boolean
-          example: true
-        key:
-          type: string
-          example: 산업안전보건법 시행규칙-제11조 제2항
-        legal_basis:
-          type: array
-          items:
-            $ref: '#/components/schemas/LegalBasisItem'
-        procedure:
-          type: array
-          items:
-            type: string
-          example:
-            - 조문에 명시된 별지 서식으로 보고서 작성
-            - 제출처: 관할 지방고용노동관서(산업안전과) 등
-            - 제출 기한: 14일 이내
-        forms:
-          type: array
-          items:
-            $ref: '#/components/schemas/FormItem'
-          example:
-            - title: 별지 제3호의2서식
-              desc: 안전관리자·보건관리자·산업보건의 해임 등 보고서
-              url: https://www.moel.go.kr/
-              publisher: 고용노동부
-        disclaimer:
-          type: string
-          example: |
-            본 응답은 [안전법 도우미 GPT]가 제공하는 참고용 법령 정보입니다.
-            정확한 법률 해석은 변호사 등 전문가와 상담하시기 바랍니다.
-            본 정보는 국가법령정보센터 및 고용노동부 고시 등을 기반으로 제공합니다.
-
-    SearchSuccess:
-      type: object
-      properties:
-        ok:
-          type: boolean
-          example: true
-        guideline:
-          type: string
-          description: 구성지침 일부(미리보기)
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/LawItem'
-
-    ScanSuccess:
-      type: object
-      properties:
-        ok:
-          type: boolean
-          example: true
-        law_name:
-          type: string
-        law_id:
-          type: string
-        시행일자:
-          type: string
-          description: YYYYMMDD
-        keyword:
-          type: string
-        match_count:
-          type: integer
-        matches:
-          type: array
-          items:
-            type: object
-            properties:
-              조문번호:
-                type: string
-              조문제목:
-                type: string
-              조문원문:
-                type: string
-
-    Error:
-      type: object
-      properties:
-        error:
-          type: string
-          example: keyword를 입력하세요.
-
-    SoftError:
-      type: object
-      properties:
-        ok:
-          type: boolean
-          example: false
-        message:
-          type: string
-          example: 정확한 조문을 찾을 수 없습니다. 국가법령정보센터에서 직접 확인하십시오.
-        source:
-          type: string
-          example: law.go.kr
-        data:
-          type: array
-          items: {}
+          items: { $ref: '#/components/schemas/SearchItem' }
