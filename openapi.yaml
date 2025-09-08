@@ -13,6 +13,9 @@ info:
 
 servers:
   - url: https://safetylawgpt-safety-law-api.onrender.com
+    description: Render 배포
+  - url: http://localhost:5000
+    description: 로컬 개발
 
 tags:
   - name: Health
@@ -29,6 +32,7 @@ paths:
     get:
       tags: [Health]
       summary: 헬스 체크
+      operationId: healthz
       responses:
         '200':
           description: 서비스 정상 여부
@@ -49,6 +53,7 @@ paths:
     get:
       tags: [Guideline]
       summary: 구성 지침 원문 확인
+      operationId: getGuideline
       responses:
         '200':
           description: 구성지침 텍스트
@@ -69,6 +74,7 @@ paths:
       tags: [Laws]
       summary: 법령 검색
       description: 키워드를 기반으로 국가법령정보센터에서 법령 목록을 검색합니다.
+      operationId: searchLaws
       parameters:
         - in: query
           name: keyword
@@ -79,9 +85,16 @@ paths:
         - in: query
           name: exact
           required: false
-          description: 법령명 정확일치 여부 (true/false)
+          description: 법령명 정확일치 여부 (true/false 또는 1/0). 서버는 "1","true","True"를 true로 처리.
           schema:
             type: boolean
+          examples:
+            fuzzy:
+              summary: 부분 일치(기본)
+              value: false
+            exact:
+              summary: 정확 일치
+              value: true
       responses:
         '200':
           description: 검색 성공 (소프트 에러도 200으로 반환)
@@ -92,7 +105,7 @@ paths:
                   - $ref: '#/components/schemas/SearchSuccess'
                   - $ref: '#/components/schemas/SoftError'
         '400':
-          description: 잘못된 요청
+          description: 잘못된 요청(예: keyword 누락)
           content:
             application/json:
               schema:
@@ -102,6 +115,7 @@ paths:
     get:
       tags: [Laws]
       summary: 특정 법령 전문에서 키워드 전수 스캔
+      operationId: scanLawByKeyword
       parameters:
         - in: query
           name: law_name
@@ -109,14 +123,14 @@ paths:
           description: 법령명(정확 일치 검색)
           schema:
             type: string
-            example: 산업안전보건법 시행규칙
+          example: 산업안전보건법 시행규칙
         - in: query
           name: keyword
           required: true
           description: 전문에서 찾을 키워드
           schema:
             type: string
-            example: 반기
+          example: 반기
       responses:
         '200':
           description: 스캔 결과 (소프트 에러도 200으로 반환)
@@ -131,15 +145,19 @@ paths:
     get:
       tags: [Laws]
       summary: 주기성 키워드(기본 '반기') 스캔
+      operationId: scanPeriodic
       parameters:
         - in: query
           name: law_name
           required: true
+          description: 법령명(정확 일치)
           schema:
             type: string
+          example: 산업안전보건법
         - in: query
           name: keyword
           required: false
+          description: 기본값 '반기'
           schema:
             type: string
             default: 반기
@@ -161,6 +179,7 @@ paths:
         임의의 질문(q)을 입력하면, 내부 라우팅으로 적절한 법령·조문을 선택해
         "법적 근거 → 절차 요약 → 서식 안내 → 면책 고지문" 구조로 JSON을 반환합니다.
         - 공식 서식이 없으면 세이프티 코리아/오픈채팅 링크로 폴백합니다.
+      operationId: getAnswerJson
       parameters:
         - in: query
           name: q
@@ -168,7 +187,7 @@ paths:
           description: 사용자 질문
           schema:
             type: string
-            example: 건설업 안전관리자 해임 신고 방법
+          example: 건설업 안전관리자 해임 신고 방법
       responses:
         '200':
           description: 표준 응답
@@ -177,7 +196,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SafetyAnswerResponse'
         '400':
-          description: 잘못된 요청
+          description: 잘못된 요청(q 누락 등)
           content:
             application/json:
               schema:
@@ -187,13 +206,14 @@ paths:
     get:
       tags: [Answers]
       summary: 표준 형식 자동 응답(Markdown)
+      operationId: getAnswerMarkdown
       parameters:
         - in: query
           name: q
           required: true
           schema:
             type: string
-            example: 안전관리자 해임 신고
+          example: 안전관리자 해임 신고
       responses:
         '200':
           description: Markdown 형식 응답(미리보기용)
@@ -384,7 +404,7 @@ components:
       properties:
         error:
           type: string
-          example: keyword 파라미터를 입력하세요
+          example: keyword를 입력하세요.
 
     SoftError:
       type: object
