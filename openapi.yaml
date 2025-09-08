@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: Safety Law Helper API
-  version: "1.1.0"
+  version: "v5.2"
 servers:
-  - url: https://safetylawgpt-safety-law-api.onrender.com
+  - url: https://YOUR-RENDER-DOMAIN
 paths:
   /healthz:
     get:
@@ -14,79 +14,80 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthzResponse'
-  /reload:
-    get:
-      summary: Reload TSV index from source
-      responses:
-        "200":
-          description: Reloaded
-          content:
-            application/json:
-              schema:
                 type: object
                 properties:
-                  reloaded: { type: boolean, example: true }
-                  count:    { type: integer, example: 12345 }
+                  status: { type: string }
+                  uptime: { type: number }
+                  version: { type: string }
+                  count: { type: integer }
   /search:
     get:
-      summary: Search laws by keyword (exact phrase or token AND)
+      summary: Search laws by keyword
       parameters:
         - in: query
           name: keyword
           required: true
           schema: { type: string }
-          description: Korean phrase or keywords (e.g., "반기 1회 이상", "폭염 휴식")
         - in: query
           name: exact
-          required: false
-          schema: { type: boolean, default: false }
-          description: If true, match exact phrase with space-insensitive regex.
+          schema: { type: boolean }
         - in: query
           name: page
-          required: false
-          schema: { type: integer, minimum: 1, default: 1 }
+          schema: { type: integer }
         - in: query
           name: page_size
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          schema: { type: integer }
       responses:
         "200":
-          description: Search results (paginated)
+          description: Search results
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResponse'
+  /answer:
+    get:
+      summary: Natural language question → Answer
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswerResponse'
 components:
   schemas:
-    HealthzResponse:
-      type: object
-      required: [status, uptime, version]
-      properties:
-        status:  { type: string, example: "ok" }
-        uptime:  { type: number, example: 12.3 }
-        version: { type: string, example: "1.1.0" }
     SearchItem:
       type: object
-      required: [lawId, lawTitle, unitType, unitNo, title, textPlain, sourceUrl]
       properties:
-        lawId:     { type: string, example: "001766" }
-        lawTitle:  { type: string, example: "산업안전보건법" }
-        unitType:  { type: string, enum: ["조","항","호","목"], example: "항" }
-        unitNo:    { type: string, example: "제29조 제1항" }
-        title:     { type: string, example: "안전보건교육" }
-        textPlain: { type: string, example: "사업주는 ... 반기 1회 이상 ..." }
-        textHtml:  { type: string, nullable: true, example: "<p>...</p>" }
-        enactedAt: { type: string, nullable: true, example: "2020-05-26" }
-        amendedAt: { type: string, nullable: true, example: "2024-06-28" }
-        sourceUrl: { type: string, example: "https://law.go.kr/법령/001766" }
+        lawId: { type: string }
+        lawTitle: { type: string }
+        unitType: { type: string }
+        unitNo: { type: string }
+        title: { type: string }
+        textPlain: { type: string }
+        textHtml: { type: string }
+        enactedAt: { type: string }
+        amendedAt: { type: string }
+        sourceUrl:
+          type: string
+          description: "law.go.kr/법령/{법령ID} (내부 식별용, 실제 열람은 정식 뷰어 안내)"
     SearchResponse:
       type: object
-      required: [total, page, page_size, items]
       properties:
-        total:     { type: integer, example: 7 }
-        page:      { type: integer, example: 1 }
-        page_size: { type: integer, example: 50 }
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
         items:
           type: array
           items: { $ref: '#/components/schemas/SearchItem' }
+    AnswerResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        content: { type: string }
+        disclaimer: { type: string }
