@@ -1,151 +1,88 @@
-# -*- coding: utf-8 -*-
-"""
-안전법 도우미 서버 v5.2 (2025-09-08)
-- DRF API 1순위, TSV DB 백업
-- 구글 서비스 계정 연동 (Sheets API)
-- 응답은 자유 형식, 마지막에 면책 고지문 고정
-"""
+import os, glob, yaml, re, datetime
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 
-import os, io, re, csv, json, requests, unicodedata
-from flask import Flask, request, jsonify, Response
-from datetime import datetime
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+LAWS_DIR = os.getenv("LAWS_DIR", "./laws")
+DISCLAIMER = ("본 응답은 [안전법 도우미 GPT]가 제공하는 참고용 법령 정보입니다. "
+              "법적 해석이나 자문은 제공하지 않으며, 반드시 최신 법령 원문과 전문가 상담을 통해 확인하시기 바랍니다.")
 
-app = Flask(__name__)
-STARTED_AT = datetime.utcnow()
+app = FastAPI(title="SafetyLawGPT API", version="1.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ===== 환경 변수 =====
-DRF_BASE = "https://www.law.go.kr/DRF/lawService.do"
-API_KEY = os.getenv("NLIC_API_KEY", "")
-TSV_URL = os.getenv("LAW_TSV_URL", "")
-TSV_PATH = os.getenv("LAW_TSV_PATH", "")
-GOOGLE_SERVICE_JSON = os.getenv("GOOGLE_SERVICE_JSON", "")
-SHEET_ID = os.getenv("SHEET_ID", "")
-SHEET_RANGE = os.getenv("SHEET_RANGE", "A:Z")
+LAWS = []
 
-DISCLAIMER = (
-    "⚠ 본 응답은 [안전법 도우미 GPT]가 제공하는 참고용 법령 정보입니다.\n"
-    "정확한 법률 해석이나 적용은 변호사 등 전문가와 반드시 상담하시기 바랍니다.\n"
-    "본 정보는 국가법령정보센터 및 고용노동부 고시 등을 기반으로 제공됩니다."
-)
-
-INDEX = []
-
-# ===== TSV / 구글시트 로딩 =====
-def load_from_tsv():
-    text = ""
-    if TSV_URL:
-        r = requests.get(TSV_URL, timeout=20)
-        r.raise_for_status()
-        text = r.text
-    elif TSV_PATH and os.path.exists(TSV_PATH):
-        with open(TSV_PATH, encoding="utf-8") as f:
-            text = f.read()
-    if not text: return []
-    reader = csv.reader(io.StringIO(text), delimiter="\t")
-    header = next(reader)
-    idx = {h:i for i,h in enumerate(header)}
-    data = []
-    for row in reader:
-        def get(c): return row[idx[c]].strip() if c in idx and idx[c] < len(row) else ""
-        data.append({
-            "lawId": get("법령ID"),
-            "lawTitle": get("법령명"),
-            "unitType": get("조문단위"),
-            "unitNo": get("조문번호"),
-            "title": get("조문제목"),
-            "textPlain": get("조문내용(Plain)"),
-            "textHtml": get("조문내용(HTML)"),
-            "enactedAt": get("시행일"),
-            "amendedAt": get("최신개정일"),
-            "sourceUrl": get("출처URL")
-        })
-    return data
-
-def load_from_sheet():
-    if not GOOGLE_SERVICE_JSON or not SHEET_ID: return []
-    creds = service_account.Credentials.from_service_account_info(
-        json.loads(GOOGLE_SERVICE_JSON),
-        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    )
-    service = build("sheets","v4",credentials=creds)
-    resp = service.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID, range=SHEET_RANGE
-    ).execute()
-    values = resp.get("values", [])
-    if not values: return []
-    header, *rows = values
-    idx = {h:i for i,h in enumerate(header)}
-    data = []
-    for row in rows:
-        def get(c): return row[idx[c]].strip() if c in idx and idx[c] < len(row) else ""
-        data.append({
-            "lawId": get("법령ID"),
-            "lawTitle": get("법령명"),
-            "unitType": get("조문단위"),
-            "unitNo": get("조문번호"),
-            "title": get("조문제목"),
-            "textPlain": get("조문내용(Plain)"),
-            "textHtml": get("조문내용(HTML)"),
-            "enactedAt": get("시행일"),
-            "amendedAt": get("최신개정일"),
-            "sourceUrl": get("출처URL")
-        })
-    return data
-
-def load_index():
-    global INDEX
+def _load_yaml(p):
     try:
-        INDEX = load_from_sheet()
-        if not INDEX: INDEX = load_from_tsv()
-    except Exception as e:
-        print("Load fail:", e)
-        INDEX = []
+        with open(p, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except Exception:
+        return None
 
-load_index()
+def _strip_html(s): return re.sub("<[^>]+>", "", s or "")
 
-# ===== API =====
-@app.get("/healthz")
-def healthz():
-    uptime = (datetime.utcnow()-STARTED_AT).total_seconds()
-    return {"status":"ok","uptime":round(uptime,1),"version":"v5.2","count":len(INDEX)}
+def reload_laws():
+    global LAWS
+    LAWS = []
+    for y in glob.glob(os.path.join(LAWS_DIR, "**", "*.yml"), recursive=True):
+        r = _load_yaml(y)
+        if not r: continue
+        if not r.get("law_id") or not r.get("article_no"): continue
+        r["_path"] = y
+        r["_text"] = (r.get("text_plain") or _strip_html(r.get("text_html"))).strip()
+        LAWS.append(r)
 
-@app.get("/search")
-def search():
-    kw = request.args.get("keyword","").strip()
-    if not kw: return {"total":0,"items":[]}
-    exact = request.args.get("exact","0").lower() in ("1","true")
-    page = max(int(request.args.get("page",1)),1)
-    page_size = min(max(int(request.args.get("page_size",50)),1),100)
+reload_laws()
 
-    def match(row):
-        text = row.get("textPlain","")
-        if exact: return kw in text
-        return all(tok in text for tok in kw.split())
+def now_iso(): return datetime.datetime.now().astimezone().isoformat()
 
-    items = [r for r in INDEX if match(r)]
-    start=(page-1)*page_size
-    return {"total":len(items),"page":page,"page_size":page_size,"items":items[start:start+page_size]}
+def search_local(q, limit=5):
+    kw = q.strip()
+    res = []
+    for r in LAWS:
+        hay = f"{r.get('law_name','')} {r.get('article_no','')} {r.get('_text','')}"
+        score = 0
+        for t in kw.split():
+            if t in hay: score += hay.count(t)
+        if kw in hay: score += 2
+        if score>0: res.append((score, r))
+    res.sort(key=lambda x:x[0], reverse=True)
+    return [x[1] for x in res[:limit]]
 
-@app.get("/answer")
-def answer():
-    q = request.args.get("q","").strip()
-    if not q: return {"ok":False,"message":"q required"}
-    data = [r for r in INDEX if any(tok in r.get("textPlain","") for tok in q.split())]
-    if not data:
-        return {"ok":True,"content":"관련 조문을 찾지 못했습니다.","disclaimer":DISCLAIMER}
-    # 자유 형식 content
-    content = f"총 {len(data)}건의 관련 조문이 확인되었습니다.\n\n"
-    for i,r in enumerate(data[:20],1):
-        content += f"{i}) {r['lawTitle']} {r['unitNo']} — {r['title']}\n{r['textPlain']}\n출처: 국가법령정보센터(https://law.go.kr/)\n\n"
-    return {"ok":True,"content":content.strip(),"disclaimer":DISCLAIMER}
+def law_search_url(q): return f"https://law.go.kr/검색?query={q}"
 
-@app.get("/openapi.yaml")
-def openapi_yaml():
-    path=os.path.join(os.path.dirname(__file__),"openapi.yaml")
-    if not os.path.exists(path): return Response("openapi.yaml not found",404)
-    return Response(open(path,encoding="utf-8").read(),mimetype="text/yaml")
+@app.get("/healthz", operation_id="healthz")
+def healthz(): return {"ok": True, "ts": now_iso(), "laws_loaded": len(LAWS)}
 
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=int(os.getenv("PORT",5000)))
+@app.get("/reload", operation_id="reload")
+def reload(): reload_laws(); return {"ok": True, "reloaded": len(LAWS)}
+
+@app.get("/search", operation_id="search")
+def search(keyword: str = Query(..., min_length=1), limit: int = 5):
+    hits = search_local(keyword, limit)
+    return {"count": len(hits), "items": [
+        {"law_id": h.get("law_id"), "law_name": h.get("law_name"),
+         "article_no": h.get("article_no"), "title": h.get("article_title"),
+         "revision_date": h.get("revision_date"), "db_synced_at": h.get("db_synced_at")}
+        for h in hits]}
+
+@app.get("/answer", operation_id="answer")
+def answer(keyword: str = Query(..., min_length=1)):
+    hits = search_local(keyword, 1)
+    if hits:
+        r = hits[0]
+        head = f"{r.get('law_name','')} | {r.get('article_no','')}({r.get('article_title','')}) | 최신 개정일: {r.get('revision_date','')}"
+        body = r.get("_text","")
+        basis = f"{head}\n— 내부 DB 기준일: {r.get('db_synced_at','')}\n— 원문:\n{body}\n— 출처: {r.get('source_url','')}"
+        middle = "- 일반 요약: 원문 조문을 근거로 현장 절차·별표·서식 유무를 확인하십시오. 불명확한 부분은 상위법·별표·고시를 추가 확인하십시오."
+        return {
+            "status":"ok","generated_at":now_iso(),
+            "legal_basis":basis,"middle":middle,"disclaimer":DISCLAIMER,
+            "law_name":r.get("law_name"),"article_no":r.get("article_no"),
+            "revision_date":r.get("revision_date"),"db_synced_at":r.get("db_synced_at"),
+            "source_url":r.get("source_url")
+        }
+    # Fallback: 무응답 금지
+    srch = law_search_url(keyword)
+    basis = f"[DB 미수록] 내부 DB에 해당 조문이 없습니다. law.go.kr에서 '{keyword}'로 검색하여 최신 원문을 확인하십시오.\n— 검색 경로: {srch}"
+    middle = "- 참고: 법률 > 시행령 > 시행규칙 > 고시·지침 순서로 원문을 확인하십시오. (확실하지 않음)"
+    return {"status":"fallback","generated_at":now_iso(),"legal_basis":basis,"middle":middle,"disclaimer":DISCLAIMER,"source_url":srch}
