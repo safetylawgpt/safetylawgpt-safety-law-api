@@ -233,3 +233,21 @@ def answer(keyword: str = Query(..., min_length=1)):
     basis = f"[DB 미수록] 내부 DB(시트/로컬)에 해당 조문이 없습니다. law.go.kr에서 '{keyword}'로 검색하여 최신 원문을 확인하십시오.\n— 검색 경로: {srch}"
     middle = "- 참고: 법률 > 시행령 > 시행규칙 > 고시·지침 순서로 원문을 확인하십시오. (확실하지 않음)"
     return {"status":"fallback","generated_at":_now_iso(),"legal_basis":basis,"middle":middle,"disclaimer":DISCLAIMER,"source_url":srch}
+from fastapi.responses import JSONResponse
+
+@app.get("/diag", operation_id="diag")
+def diag():
+    info = {"sheets_id_set": bool(SHEETS_ID), "creds_path": GOOGLE_CREDS, "range": SHEETS_RANGE}
+    try:
+        creds = Credentials.from_service_account_file(
+            GOOGLE_CREDS, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        )
+        svc = build("sheets", "v4", credentials=creds)
+        meta = svc.spreadsheets().get(spreadsheetId=SHEETS_ID).execute()
+        titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        info.update({"ok": True, "sheet_titles": titles})
+        return info
+    except Exception as e:
+        info.update({"ok": False, "error_type": e.__class__.__name__, "error": str(e)})
+        return JSONResponse(info, status_code=500)
+
