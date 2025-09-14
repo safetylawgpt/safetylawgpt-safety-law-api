@@ -1,0 +1,21 @@
+law_id: "001766"
+law_name: "산업안전보건법 시행령"
+article_no: "제16조"
+article_title: "안전관리자의 선임 등"
+revision_date: "2025-06-21"
+db_synced_at: "2025-09-13"
+status: "유효"
+source_url: "https://law.go.kr/법령/산업안전보건법시행령/제16조"
+text_plain: |
+  제16조(안전관리자의 선임 등) ① ...
+  ② ...
+  1. ...
+text_html: |
+  <p><strong>제16조(안전관리자의 선임 등)</strong> ① ...</p>
+  <p>② ...</p>
+  <ol><li>1. ...</li></ol>
+attachments:
+  - type: "별표"
+    name: "별표 3"
+    topic: "안전관리자 선임 기준"
+    url: "https://law.go.kr/..."
