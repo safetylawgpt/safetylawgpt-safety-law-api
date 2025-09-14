@@ -1,17 +1,15 @@
-openapi: 3.1.0
+openapi: 3.0.1
 info:
-  title: Safety Law Helper API
-  version: "v5.2"
-  description: "DRF 1순위 + TSV/Sheets 백업. 자유 형식 응답, 마지막에 면책 고지문 고정."
-jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+  title: SafetyLawGPT API
+  version: "1.1.0"
 servers:
-  - url: https://safetylawgpt-safety-law-api.onrender.com
+  - url: /
 
 paths:
   /healthz:
     get:
-      operationId: getHealthz
-      summary: Health check
+      operationId: healthz
+      summary: Health check & load stats
       responses:
         "200":
           description: OK
@@ -19,17 +17,22 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status, uptime, version, count]
                 properties:
-                  status:  { type: string, example: "ok" }
-                  uptime:  { type: number, example: 12.3 }
-                  version: { type: string, example: "v5.2" }
-                  count:   { type: integer, example: 12345 }
+                  ok:
+                    type: boolean
+                  ts:
+                    type: string
+                  laws_loaded:
+                    type: integer
+                  sheets:
+                    type: integer
+                  yaml:
+                    type: integer
 
   /reload:
     get:
-      operationId: reloadIndex
-      summary: Reload TSV/Sheets index
+      operationId: reload
+      summary: Reload laws from Sheets + YAML
       responses:
         "200":
           description: Reloaded
@@ -37,93 +40,145 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [reloaded, count]
                 properties:
-                  reloaded: { type: boolean, example: true }
-                  count:    { type: integer, example: 23456 }
+                  ok:
+                    type: boolean
+                  reloaded:
+                    type: integer
+                  sheets:
+                    type: integer
+                  yaml:
+                    type: integer
 
   /search:
     get:
-      operationId: searchLaws
-      summary: Search laws by keyword (multi-match, original text)
+      operationId: search
+      summary: Local keyword search across loaded laws
       parameters:
         - in: query
           name: keyword
           required: true
-          description: Korean phrase or keywords (예: "반기 1회 이상")
-          schema: { type: string }
+          schema:
+            type: string
+            minLength: 1
         - in: query
-          name: exact
-          description: If true, exact phrase search (공백 포함 그대로)
-          schema: { type: boolean, default: false }
-        - in: query
-          name: page
-          schema: { type: integer, minimum: 1, default: 1 }
-        - in: query
-          name: page_size
-          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          name: limit
+          required: false
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
       responses:
         "200":
           description: Search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        law_id:
+                          type: string
+                        law_name:
+                          type: string
+                        article_no:
+                          type: string
+                        title:
+                          type: string
+                        revision_date:
+                          type: string
+                        db_synced_at:
+                          type: string
+                        level:
+                          type: string
+                          description: act/decree/rule/notice
+                          enum: [act, decree, rule, notice]
+                        source:
+                          type: string
 
   /answer:
     get:
-      operationId: answerQuestion
-      summary: Natural language question → free-form answer with citations
+      operationId: answer
+      summary: Compose v5.8 response (근거/본문/면책고지)
       parameters:
         - in: query
-          name: q
+          name: keyword
           required: true
-          description: 사용자 질문 (예: "반기 1회 이상 정기교육 근거")
-          schema: { type: string }
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: role_lock
+          description: 역할 잠금 (혼동 방지)
+          required: false
+          schema:
+            type: string
+            enum: [안전관리자, 보건관리자, 안전보건총괄책임자, 관리감독자, 안전보건관리담당자, 산업보건의]
+        - in: query
+          name: include_all_levels
+          description: 법·령·규칙·고시까지 다층 근거 출력
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - in: query
+          name: scan_frequency
+          description: '반기 1회 이상 등 빈도 전수 스캔 강제 플래그(미지정 시 키워드로 자동 감지)'
+          required: false
+          schema:
+            type: boolean
       responses:
         "200":
-          description: Free-form answer
+          description: v5.8 blocks
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AnswerResponse'
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  generated_at:
+                    type: string
+                  legal_basis:
+                    type: string
+                    description: "[근거] 블록(반말 요약 포함)"
+                  middle:
+                    type: string
+                    description: "(제목 없는 본문) 블록(존댓말)"
+                  disclaimer:
+                    type: string
+                    description: "[면책고지] 블록"
+                  markdown:
+                    type: string
+                    description: "3블록 전체 마크다운"
+                  params:
+                    type: object
+                    properties:
+                      role_lock:
+                        type: string
+                        nullable: true
+                      include_all_levels:
+                        type: boolean
+                      scan_frequency:
+                        type: boolean
 
-components:
-  schemas:
-    SearchItem:
-      type: object
-      required: [lawId, lawTitle, unitType, unitNo, title, textPlain, sourceUrl]
-      properties:
-        lawId:     { type: string, example: "001766" }
-        lawTitle:  { type: string, example: "산업안전보건법" }
-        unitType:  { type: string, enum: ["조","항","호","목"], example: "항" }
-        unitNo:    { type: string, example: "제29조 제1항" }
-        title:     { type: string, example: "안전보건교육" }
-        textPlain: { type: string, example: "사업주는 ... 반기 1회 이상 ..." }
-        textHtml:  { type: string, nullable: true, example: "<p>...</p>" }
-        enactedAt: { type: string, nullable: true, example: "2020-05-26" }
-        amendedAt: { type: string, nullable: true, example: "2024-06-28" }
-        sourceUrl:
-          type: string
-          description: "https://law.go.kr/법령/{법령ID} (식별용). 실제 열람은 정식 뷰어(lsInfoP.do / lsSc.do)로 안내"
-    SearchResponse:
-      type: object
-      required: [total, page, page_size, items]
-      properties:
-        total:     { type: integer, example: 7 }
-        page:      { type: integer, example: 1 }
-        page_size: { type: integer, example: 50 }
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/SearchItem' }
-    AnswerResponse:
-      type: object
-      required: [ok, content, disclaimer]
-      properties:
-        ok:        { type: boolean, example: true }
-        content:
-          type: string
-          description: "자유 형식 답변(법령 원문 인용 + 간단 설명 + 출처 안내). 면책 고지문은 별도 필드(disclaimer)로 전달."
-        disclaimer:
-          type: string
-          example: "⚠ 본 응답은 [안전법 도우미 GPT]..."
+  /diag:
+    get:
+      operationId: diag
+      summary: Sheets connectivity diagnostics
+      responses:
+        "200":
+          description: OK or error
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
