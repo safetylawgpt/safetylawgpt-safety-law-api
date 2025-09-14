@@ -1,4 +1,4 @@
-# server.py  — v5.8 응답 강제 / Sheets ALL + 한국어 헤더 / 다층 근거 + 역할잠금 + 전수스캔
+# server.py  — v5.8 응답 강제 / Sheets ALL + 한국어 헤더 / 다층 근거 + 역할잠금 + 전수스캔(보강)
 import os, glob, yaml, re, datetime, urllib.parse
 from typing import List, Dict, Tuple, Optional
 from fastapi import FastAPI, Query
@@ -22,7 +22,7 @@ DISCLAIMER = (
     "이 정보를 바탕으로 한 결정과 실행의 책임은 사용자에게 있습니다."
 )
 
-app = FastAPI(title="SafetyLawGPT API", version="1.1.0")
+app = FastAPI(title="SafetyLawGPT API", version="1.1.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 LAWS: List[Dict] = []  # 메모리 DB (시트 우선, YAML 보조)
@@ -46,7 +46,6 @@ def _law_level(law_name: str) -> str:
     if "시행규칙" in n: return "rule"
     if "시행령"  in n: return "decree"
     if "고시" in n or "지침" in n: return "notice"
-    # '기준에 관한 규칙' 같은 표현은 rule로 간주
     if "기준에 관한 규칙" in n: return "rule"
     return "act"
 
@@ -65,24 +64,57 @@ def _detect_role(q: str) -> Optional[str]:
             return r
     return None
 
-FREQ_PAT = re.compile(r"(반기\s*1회(?:\s*이상)?|반기|6개월\s*1회(?:\s*이상)?)")
+# 빈도/주기 전수 스캔 보강
+FREQ_PAT = re.compile(r"(반기\s*1회(?:\s*이상)?|반기|6\s*개월\s*1회(?:\s*이상)?|6\s*개월|분기|정기)")
 VERB_PAT = re.compile(r"(점검|평가|관리|확인|검토)")
 
-def _scan_frequency(text: str) -> List[str]:
-    out = []
-    for m in FREQ_PAT.finditer(text or ""):
-        # 주변 문맥 60자 추출
-        start = max(0, m.start()-40); end = min(len(text), m.end()+40)
-        ctx = text[start:end].replace("\n"," ").strip()
-        if VERB_PAT.search(ctx):
-            out.append(ctx)
-    # 중복 제거
-    seen = set(); uniq = []
-    for t in out:
-        k = re.sub(r"\s+", " ", t)
-        if k in seen: continue
-        seen.add(k); uniq.append(t)
-    return uniq[:20]
+MARK_HANG = re.compile(r"제\s*(\d+)\s*항")
+MARK_HO   = re.compile(r"제\s*(\d+)\s*호")
+MARK_MOK  = re.compile(r"([가-힣])\s*[\.]")  # 가. 나. 다. … 형태 목 표시
+
+def _index_markers(text: str) -> List[Tuple[int,str]]:
+    """본문 내 항/호/목 표지를 인덱싱해서 (pos, label) 리스트로 반환"""
+    marks: List[Tuple[int,str]] = []
+    for m in MARK_HANG.finditer(text or ""):
+        marks.append((m.start(), f"제{m.group(1)}항"))
+    for m in MARK_HO.finditer(text or ""):
+        marks.append((m.start(), f"제{m.group(1)}호"))
+    for m in MARK_MOK.finditer(text or ""):
+        ch = m.group(1)
+        if ch and ch in "가나다라마바사아자차카타파하":
+            marks.append((m.start(), f"{ch}목"))
+    marks.sort(key=lambda x: x[0])
+    return marks
+
+def _scan_frequency_with_paths(text: str, article_no: str) -> List[Tuple[str,str]]:
+    """
+    빈도 표현을 전수 매칭하고, 가장 가까운 상위 표지(항/호/목)를 찾아
+    '조문 경로'와 스니펫을 반환: [(경로, 스니펫), ...]
+    """
+    if not text:
+        return []
+    marks = _index_markers(text)
+    out: List[Tuple[str,str]] = []
+    for m in FREQ_PAT.finditer(text):
+        pos = m.start()
+        near = ""
+        for p, label in reversed(marks):
+            if p <= pos:
+                near = label
+                break
+        path = f"{article_no}{near}" if near else f"{article_no}"
+        start = max(0, pos - 60); end = min(len(text), pos + 80)
+        snippet = re.sub(r"\s+", " ", text[start:end].strip())
+        if VERB_PAT.search(snippet):
+            out.append((path, snippet))
+    # 중복 제거(경로+문장 기준)
+    seen = set(); uniq: List[Tuple[str,str]] = []
+    for p, s in out:
+        k = (p, re.sub(r"\s+", " ", s))
+        if k in seen: 
+            continue
+        seen.add(k); uniq.append((p, s))
+    return uniq
 
 # ---------- YAML 보조 로더 ----------
 def _load_yaml(path: str) -> Optional[Dict]:
@@ -93,7 +125,7 @@ def _load_yaml(path: str) -> Optional[Dict]:
         return None
 
 def load_from_yaml() -> List[Dict]:
-    out = []
+    out: List[Dict] = []
     for y in glob.glob(os.path.join(LAWS_DIR, "**", "*.yml"), recursive=True):
         r = _load_yaml(y)
         if not r or not r.get("law_id") or not r.get("article_no"):
@@ -180,15 +212,15 @@ def _process_values(values: List[List[str]]) -> List[Dict]:
                 "text_html":     (t_html  + "\n") if t_html  else "",
                 "_source":       "sheets",
             }
+            rec["_level"] = _law_level(law_name)
             by_key[key] = rec
         else:
             if t_plain: by_key[key]["text_plain"] += t_plain + "\n"
             if t_html:  by_key[key]["text_html"]  += t_html  + "\n"
 
-    out = []
+    out: List[Dict] = []
     for rec in by_key.values():
         rec["_text"] = (rec.get("text_plain") or _strip_html(rec.get("text_html"))).strip()
-        rec["_level"] = _law_level(rec.get("law_name",""))
         out.append(rec)
     return out
 
@@ -287,18 +319,19 @@ def _basis_block_for(rec: Dict, scan_freq: bool=False) -> str:
     rev      = rec.get("revision_date","")
     src      = rec.get("source_url","")
     summary  = _summarize(rec.get("_text",""))
-    lines = []
+    lines: List[str] = []
     lines.append(f"- **법령명:** {law_name}")
     lines.append(f"- **조문:** {article}({title})")
     lines.append(f"- **최신개정일:** {rev}")
     lines.append(f"- **원문 요지:** {summary}")
     if scan_freq:
-        matches = _scan_frequency(rec.get("_text",""))
-        if matches:
-            lines.append(f"- **〈매칭 항목(전수)〉**")
-            for m in matches:
-                mm = _ellipsis(m, 140)
-                lines.append(f"  - “**{mm}**”")
+        matches = _scan_frequency_with_paths(rec.get("_text",""), rec.get("article_no",""))
+        # 전수 결과가 2건 이상일 때만 불릿 출력(라벨 없음)
+        if len(matches) >= 2:
+            for path, snip in matches:
+                mm = _ellipsis(snip, 140)
+                lines.append(f"  - `{path}` — “**{mm}**”")
+        # 0~1건이면 아무 것도 출력하지 않음
     lines.append(f"- **출처:** {_safe_link('국가법령정보센터 바로가기', src)}")
     return "\n".join(lines)
 
@@ -306,14 +339,14 @@ def _compose_blocks(keyword: str, role_lock: Optional[str], include_all_levels: 
     hits = _search_local(keyword, 16)
     if not hits:
         srch = _search_url(keyword)
-        basis = f"**[근거]**\n- 원문을 찾지 못했다. 내부 DB(시트/로컬)에 해당 조문이 없다.\n- **검색 경로:** {_safe_link('국가법령정보센터 검색', srch)}"
-        body  = ("**질문 해결 요약**\n"
+        basis = f"📌 **[근거]**\n- 원문을 찾지 못했다. 내부 DB(시트/로컬)에 해당 조문이 없다.\n- **검색 경로:** {_safe_link('국가법령정보센터 검색', srch)}"
+        body  = ("**내용 요약**\n"
                  "- 법률 → 시행령 → 시행규칙 → 고시·지침 순서로 최신 원문을 확인해 주세요.\n"
                  "- 조문·별표 정확 일치 항목만 인용합니다.\n"
                  "※ 추가 확인: 상·하위법 개정일을 꼭 비교해 주세요.")
         return basis, body
 
-    # 역할 잠금: 질의에 역할 키워드가 있으면, 그 역할 관련 글자 포함 레코드 우선
+    # 역할 잠금: 질의에 역할 키워드가 있으면, 그 역할 관련 레코드 우선
     role = role_lock or _detect_role(keyword) or ""
     if role:
         role_hits = [r for r in hits if role in (r.get("_text","")+r.get("article_title","")+r.get("law_name",""))]
@@ -324,7 +357,7 @@ def _compose_blocks(keyword: str, role_lock: Optional[str], include_all_levels: 
     order = ["act","decree","rule","notice"] if include_all_levels else ["decree"]  # 최소 시행령
     labels = {"act":"(법률)","decree":"(시행령)","rule":"(시행규칙)","notice":"(고시·지침)"}
 
-    basis_parts = ["📌 **[근거]**"]
+    basis_parts: List[str] = ["📌 **[근거]**"]
     for lv in order:
         if not buckets.get(lv): continue
         for rec in buckets[lv]:
@@ -333,14 +366,14 @@ def _compose_blocks(keyword: str, role_lock: Optional[str], include_all_levels: 
     basis_md = "\n".join(basis_parts)
 
     # 본문(존댓말)
-    body_lines = []
+    body_lines: List[str] = []
     body_lines.append("**내용 요약**")
     if role:
         body_lines.append(f"- 본 질의는 **{role}** 관련으로 해석했습니다(역할 잠금).")
     if scan_frequency:
-        body_lines.append("- 요청하신 **반기 1회 이상** 관련 조항을 전수로 매칭하여 요지를 정리했습니다.")
-    body_lines.append("- 상위법 우선 원칙을 적용했으며, 직접 관련된 하위법만 포함했습니다.")
-    body_lines.append("※ 추가 확인: 상·하위법의 **최신개정일**이 서로 다른 경우가 있으니 반드시 개정일을 비교해 주세요.")
+        body_lines.append("- 요청하신 **반기 1회 이상** 관련 조항을 전수 매칭해 요지를 정리했습니다.")
+    body_lines.append("- 상위법 우선 원칙을 적용했고, 직접 관련된 하위법만 포함했습니다.")
+    body_lines.append("※ 추가 확인: 상·하위법의 **최신개정일**이 서로 다를 수 있으니 반드시 비교해 주세요.")
     body_md = "\n".join(body_lines)
 
     return basis_md, body_md
@@ -356,9 +389,9 @@ def answer(
     include_all_levels: bool = Query(True, description="법·령·규칙·고시까지 다층 근거 출력"),
     scan_frequency: Optional[bool] = Query(None, description="‘반기 1회 이상’ 등 빈도 전수 스캔"),
 ):
-    # scan_frequency 자동 판별
+    # 자동 판별(강화)
     if scan_frequency is None:
-        scan_frequency = bool(re.search(r"(반기|6개월|1회\s*이상)", keyword))
+        scan_frequency = bool(re.search(r"(반기|6\s*개월|분기|1회\s*이상|정기)", keyword))
 
     basis_md, body_md = _compose_blocks(keyword, role_lock, include_all_levels, scan_frequency)
     markdown = _compose_markdown(basis_md, body_md, DISCLAIMER)
@@ -395,4 +428,3 @@ def diag():
     except Exception as e:
         info.update({"ok": False, "error_type": e.__class__.__name__, "error": str(e)})
         return JSONResponse(info, status_code=500)
-
